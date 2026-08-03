@@ -107,35 +107,82 @@ class DatabentoClient:
         db_symbol = SYMBOL_MAP[symbol]
         session_info = self.get_session_info()
         use_live = session_info["currentSession"] == "NY"
-        
+
         today = datetime.now(timezone.utc)
-        start_date = today - timedelta(days=7)
-        
-        params = {
-            "dataset": DATASET,
-            "symbols": db_symbol,
-            "stype_in": "continuous",
-            "stype_out": "instrument_id",
-            "start": start_date.strftime("%Y-%m-%d"),
-            "end": today.strftime("%Y-%m-%d"),
-            "schema": "mbp-1",
-            "limit": 100
-        }
-        
-        response_text = None
-        if use_live:
-            try:
-                live_text = await self.get("/v0/timeseries.get_range", params, use_live=True)
-                if len(live_text.strip().split("\n")) > 1:
-                    response_text = live_text
-            except Exception:
-                pass
-                
-        if not response_text:
-            response_text = await self.get("/v0/timeseries.get_range", params, use_live=False)
-            
-        rows = self.parse_csv(response_text)
+
+        # mbp-1 is tick-level (hundreds of updates/sec while the market is open), and
+        # timeseries.get_range streams chronologically from `start` with a hard `limit`.
+        # A wide window here doesn't return the most recent ticks -- it returns the
+        # first `limit` ticks after `start`, so rows[-1] can be from the very start of
+        # the window. Start tight (recent) and only widen enough to cross a closed
+        # market (weekend/holiday); the first non-empty result is the freshest available.
+        #
+        # The historical API can also reject `end` as too recent for two different
+        # reasons -- plain ingestion lag, or (for GLBX.MDP3 specifically) a licensing
+        # embargo when the API key lacks a real-time entitlement -- and reports the
+        # true accessible horizon either way. Once discovered, treat it as the new
+        # "now" for the remaining lookback tiers instead of re-hitting the same wall.
+        reference_end = today
+        rows = []
+        last_error = None
+        for lookback in (timedelta(minutes=15), timedelta(hours=4), timedelta(days=1), timedelta(days=3)):
+            start_date = reference_end - lookback
+
+            params = {
+                "dataset": DATASET,
+                "symbols": db_symbol,
+                "stype_in": "continuous",
+                "stype_out": "instrument_id",
+                "start": start_date.strftime("%Y-%m-%dT%H:%M:%S"),
+                "end": reference_end.strftime("%Y-%m-%dT%H:%M:%S"),
+                "schema": "mbp-1",
+                "limit": 100
+            }
+
+            response_text = None
+            if use_live and reference_end == today:
+                try:
+                    live_text = await self.get("/v0/timeseries.get_range", params, use_live=True)
+                    if len(live_text.strip().split("\n")) > 1:
+                        response_text = live_text
+                except Exception:
+                    pass
+
+            if not response_text:
+                try:
+                    response_text = await self.get("/v0/timeseries.get_range", params, use_live=False)
+                except Exception as e:
+                    available_end = None
+                    try:
+                        body = json.loads(str(e).split(": ", 1)[1])
+                        available_end = body["detail"]["payload"]["available_end"]
+                    except Exception:
+                        pass
+
+                    if available_end:
+                        reference_end = datetime.fromisoformat(available_end.replace("Z", "+00:00"))
+                        start_date = reference_end - lookback
+                        retry_params = {
+                            **params,
+                            "start": start_date.strftime("%Y-%m-%dT%H:%M:%S"),
+                            "end": reference_end.strftime("%Y-%m-%dT%H:%M:%S"),
+                        }
+                        try:
+                            response_text = await self.get("/v0/timeseries.get_range", retry_params, use_live=False)
+                        except Exception as e2:
+                            last_error = e2
+                            continue
+                    else:
+                        last_error = e
+                        continue
+
+            rows = self.parse_csv(response_text)
+            if rows:
+                break
+
         if not rows:
+            if last_error:
+                raise Exception(f"No quote data available for {symbol}: {last_error}")
             raise Exception(f"No quote data available for {symbol}")
             
         latest = rows[-1]
