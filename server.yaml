@@ -1,0 +1,20 @@
+name: "databento"
+image: "mcp/databento:latest"
+type: "server"
+
+config:
+  port: 8008
+  path: "/mcp"
+  transport: "streamable-http"
+  secrets:
+    - name: "DATABENTO_API_KEY"
+      description: "Databento API Key (must start with db-)"
+      required: true
+  env:
+    - name: "MCP_PORT"
+      description: "Port the server binds inside the container"
+      default: "8008"
+
+client_registration:
+  claude_desktop: true
+  claude_code: true
