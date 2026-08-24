@@ -3,6 +3,7 @@ databento-mcp-server — FastMCP server for Databento market data.
 """
 
 import os
+from datetime import datetime
 from typing import Optional, List
 from fastmcp import FastMCP
 import databento_core as core
@@ -18,8 +19,7 @@ async def get_futures_quote(symbol: str) -> dict:
 @mcp.tool()
 def get_session_info(timestamp: Optional[str] = None) -> dict:
     """Get current trading session information (Asian/London/NY)."""
-    import dateutil.parser
-    dt = dateutil.parser.isoparse(timestamp) if timestamp else None
+    dt = datetime.fromisoformat(timestamp) if timestamp else None
     client = core.get_client()
     return client.get_session_info(dt)
 

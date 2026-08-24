@@ -1,10 +1,27 @@
-version: "3.8"
+name: databento-mcp
 services:
   databento:
-    image: mcp/databento:latest
-    container_name: databento-container
-    restart: unless-stopped
+    # Renamed from "databento-container" 2026-08-24: the nightly restart cron
+    # (/usr/local/bin/mcp-nightly-restart.sh) discovers containers by filtering
+    # on "mcp" in the name. The old name didn't match, so this container was
+    # silently never restarted for 16 days straight and leaked ~2.8GB — see the
+    # FASTMCP_STATELESS_HTTP fix in .env for the actual leak fix. Matching the
+    # rest of the fleet's "<name>-mcp" convention here closes the gap without
+    # having to special-case the cron script's filter.
+    #
+    # The explicit `name:` project field above matters more than it looks: without
+    # it, Compose derives the project name from whatever directory `-f` is invoked
+    # from, so the SAME compose file run via `cd databento && docker compose up`
+    # vs `docker compose -f /opt/databento-mcp/docker-compose.yml up` silently
+    # creates TWO DIFFERENT projects — and since container_name is hardcoded, the
+    # second one fails with "name already in use" against the first. Hit exactly
+    # this 2026-08-24 testing setup-vps.sh; every compose file in this repo needs
+    # an explicit `name:` for the same reason.
+    container_name: databento-mcp
     env_file:
-      - .env
+    - .env
+    image: mcp/databento:latest
+    build: .
     ports:
-      - "127.0.0.1:8008:8008"
+    - 127.0.0.1:8008:8008
+    restart: unless-stopped
